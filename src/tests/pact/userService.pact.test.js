@@ -1,7 +1,6 @@
 const path = require("path");
 const { Pact } = require("@pact-foundation/pact");
 const UserServiceClient = require("../../api/userService"); 
-
 // Configure Pact Mock Service
 const provider = new Pact({
   consumer: "ConsumerApp",
