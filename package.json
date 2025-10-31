@@ -1,0 +1,21 @@
+{
+  "name": "consumer-app",
+  "version": "1.0.0",
+  "scripts": {
+    "test:pact": "jest src/tests/pact --runInBand --verbose",
+    "publish:pact": "node pact-config.js",
+    "test:publish:pact": "npm run test:pact && npm run publish:pact",
+    "pact:publish": "pact-broker publish ./pacts --consumer-app-version=${npm_package_version} --broker-base-url=${PACT_BROKER_BASE_URL} --broker-token=${PACT_BROKER_TOKEN}"
+  },
+  "devDependencies": {
+    "@pact-foundation/pact": "^11.0.0",
+    "@pact-foundation/pact-cli": "^16.1.5",
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/git": "^10.0.1",
+    "jest": "^29.0.0",
+    "semantic-release": "^22.0.12"
+  },
+  "dependencies": {
+    "express": "^5.1.0"
+  }
+}

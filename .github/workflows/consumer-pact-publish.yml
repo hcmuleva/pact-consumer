@@ -1,0 +1,69 @@
+name: Consumer - Publish Pact (Main)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'package.json'
+
+env:
+  PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
+  PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
+
+jobs:
+  publish-pact:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Pact tests
+        run: npm run test:pact
+
+      - name: Get package version
+        id: package-version
+        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+
+      - name: Publish Pact to Broker
+        run: |
+          npx pact-broker publish \
+            ./pacts \
+            --consumer-app-version=${{ steps.package-version.outputs.version }} \
+            --branch=main \
+            --broker-base-url=$PACT_BROKER_BASE_URL \
+            --broker-token=$PACT_BROKER_TOKEN \
+            --tag=main \
+            --tag=prod \
+            --build-url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Can I deploy to production?
+        run: |
+          npx pact-broker can-i-deploy \
+            --pacticipant=ConsumerApp \
+            --version=${{ steps.package-version.outputs.version }} \
+            --to-environment=production \
+            --broker-base-url=$PACT_BROKER_BASE_URL \
+            --broker-token=$PACT_BROKER_TOKEN \
+            --retry-while-unknown=60 \
+            --retry-interval=10
+
+      - name: Record deployment to production
+        if: success()
+        run: |
+          npx pact-broker record-deployment \
+            --pacticipant=ConsumerApp \
+            --version=${{ steps.package-version.outputs.version }} \
+            --environment=production \
+            --broker-base-url=$PACT_BROKER_BASE_URL \
+            --broker-token=$PACT_BROKER_TOKEN
