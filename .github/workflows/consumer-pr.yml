@@ -1,8 +1,3 @@
-# ============================================
-# CONSUMER WORKFLOWS
-# ============================================
-
-# FILE: .github/workflows/consumer-pr.yml
 name: Consumer - PR Validation
 
 on:
@@ -11,7 +6,7 @@ on:
   push:
     branches:
       - 'feature/**'
-      - 'featur/**'  # Added for your branch naming
+      - 'featur/**'
       - 'feat/**'
 
 env:
@@ -56,27 +51,29 @@ jobs:
             --broker-password=${{ env.PACT_BROKER_PASSWORD }} \
             --tag=${{ github.ref_name }}
 
-      - name: Check if can deploy
-        id: can-i-deploy
-        continue-on-error: true
+      # REMOVED: can-i-deploy check for feature branches
+      # Provider will verify via webhook automatically
+
+      - name: Wait for webhook trigger
         run: |
-          npx pact-broker can-i-deploy \
-            --pacticipant=ConsumerApp \
-            --version=${{ github.sha }} \
-            --to-environment=test \
-            --broker-base-url=${{ env.PACT_BROKER_BASE_URL }} \
-            --broker-username=${{ env.PACT_BROKER_USERNAME }} \
-            --broker-password=${{ env.PACT_BROKER_PASSWORD }} \
-            --retry-while-unknown=30 \
-            --retry-interval=10
+          echo "⏳ Webhook triggered - Provider verification starting..."
+          echo "View webhook logs at: ${{ env.PACT_BROKER_BASE_URL }}/webhooks"
+          echo "View provider workflow at: https://github.com/hcmuleva/pact-provider/actions"
+          sleep 5
 
       - name: Create summary
         run: |
-          echo "## 🎉 Consumer Pact Tests" >> $GITHUB_STEP_SUMMARY
+          echo "## 🎉 Consumer Pact Published" >> $GITHUB_STEP_SUMMARY
           echo "✅ Pact tests completed" >> $GITHUB_STEP_SUMMARY
-          echo "📦 Published to broker: ${{ env.PACT_BROKER_BASE_URL }}" >> $GITHUB_STEP_SUMMARY
-          echo "🔖 Version: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
-          echo "🌿 Branch: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "📦 Published to broker" >> $GITHUB_STEP_SUMMARY
+          echo "🔖 Version: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "🌿 Branch: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⏳ **Next Step:** Provider verification triggered via webhook" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Monitor at:" >> $GITHUB_STEP_SUMMARY
+          echo "- [Provider Workflows](https://github.com/hcmuleva/pact-provider/actions)" >> $GITHUB_STEP_SUMMARY
+          echo "- [Pact Broker](${{ env.PACT_BROKER_BASE_URL }})" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload Pact files
         uses: actions/upload-artifact@v4
