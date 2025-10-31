@@ -53,3 +53,38 @@ describe("User Service Pact Test", () => {
     });
   });
 });
+describe("when requesting user with email field", () => {
+  beforeAll(() => {
+    return provider.addInteraction({
+      state: "user with id 1 exists with email",
+      uponReceiving: "a request for user with id 1 expecting email",
+      withRequest: {
+        method: "GET",
+        path: "/users/1",
+        headers: {
+          "Accept": "application/json"
+        }
+      },
+      willRespondWith: {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: {
+          id: 1,
+          name: "John Doe",
+          email: "john.doe@example.com"  // NEW FIELD!
+        }
+      }
+    });
+  });
+
+  test("should return user with email", async () => {
+    const client = new UserServiceClient(provider.mockService.baseUrl);
+    const response = await client.getUserById(1);
+
+    expect(response.success).toBe(true);
+    expect(response.data).toHaveProperty('email');
+    expect(response.data.email).toContain('@');
+  });
+});
