@@ -1,0 +1,317 @@
+--- FILE: ./workflows/consumer-release.yml ---
+name: Consumer - Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Run Pact tests
+        run: npm run test:pact
+
+      - name: Semantic Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npx semantic-release
+
+      - name: Get new version
+        id: version
+        run: echo "new_version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+
+      - name: Create Git Tag
+        if: steps.version.outputs.new_version != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a v${{ steps.version.outputs.new_version }} -m "Release v${{ steps.version.outputs.new_version }}"
+          git push origin v${{ steps.version.outputs.new_version }}
+
+      - name: Create GitHub Release
+        if: steps.version.outputs.new_version != ''
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ steps.version.outputs.new_version }}
+          release_name: Release v${{ steps.version.outputs.new_version }}
+          draft: false
+          prerelease: false
+--- FILE: ./workflows/consumer-can-i-deploy.yml ---
+
+--- FILE: ./workflows/consumer-pact-publish.yml ---
+name: Consumer - Publish Pact (Main)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'package.json'
+
+env:
+  PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
+  PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
+
+jobs:
+  publish-pact:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Pact tests
+        run: npm run test:pact
+
+      - name: Get package version
+        id: package-version
+        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+
+      - name: Publish Pact to Broker
+        run: |
+          npx pact-broker publish \
+            ./pacts \
+            --consumer-app-version=${{ steps.package-version.outputs.version }} \
+            --branch=main \
+            --broker-base-url=$PACT_BROKER_BASE_URL \
+            --broker-token=$PACT_BROKER_TOKEN \
+            --tag=main \
+            --tag=prod \
+            --build-url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Can I deploy to production?
+        run: |
+          npx pact-broker can-i-deploy \
+            --pacticipant=ConsumerApp \
+            --version=${{ steps.package-version.outputs.version }} \
+            --to-environment=production \
+            --broker-base-url=$PACT_BROKER_BASE_URL \
+            --broker-token=$PACT_BROKER_TOKEN \
+            --retry-while-unknown=60 \
+            --retry-interval=10
+
+      - name: Record deployment to production
+        if: success()
+        run: |
+          npx pact-broker record-deployment \
+            --pacticipant=ConsumerApp \
+            --version=${{ steps.package-version.outputs.version }} \
+            --environment=production \
+            --broker-base-url=$PACT_BROKER_BASE_URL \
+            --broker-token=$PACT_BROKER_TOKEN
+--- FILE: ./workflows/consumer-pact-test.yml ---
+name: Consumer - Pact Tests (PR)
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'src/**'
+      - 'package.json'
+      - 'package-lock.json'
+
+env:
+  PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
+  PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
+
+jobs:
+  test-and-publish-pact:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Needed for semantic-release
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Run Pact tests
+        run: npm run test:pact
+
+      - name: Publish Pact to Broker (PR)
+        run: |
+          npx pact-broker publish \
+            ./pacts \
+            --consumer-app-version=${{ github.sha }} \
+            --branch=${{ github.head_ref }} \
+            --broker-base-url=$PACT_BROKER_BASE_URL \
+            --broker-token=$PACT_BROKER_TOKEN \
+            --tag=pr-${{ github.event.pull_request.number }}
+
+      - name: Check if can deploy
+        id: can-i-deploy
+        continue-on-error: true
+        run: |
+          npx pact-broker can-i-deploy \
+            --pacticipant=ConsumerApp \
+            --version=${{ github.sha }} \
+            --to-environment=test \
+            --broker-base-url=$PACT_BROKER_BASE_URL \
+            --broker-token=$PACT_BROKER_TOKEN \
+            --retry-while-unknown=30 \
+            --retry-interval=10
+
+      - name: Comment PR with Pact status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const canDeploy = '${{ steps.can-i-deploy.outcome }}' === 'success';
+            const status = canDeploy ? '✅ PASSED' : '⚠️ PENDING';
+            const message = canDeploy 
+              ? 'Provider verification passed! Safe to merge.' 
+              : 'Waiting for provider verification...';
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## Pact Contract Status: ${status}\n\n${message}\n\n**Consumer Version:** \`${{ github.sha }}\`\n\n[View in Pact Broker](${process.env.PACT_BROKER_BASE_URL})`
+            })
+
+      - name: Upload Pact files as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pacts-${{ github.sha }}
+          path: pacts/
+          retention-days: 7
+--- FILE: ./workflows/consumer-ci.yml ---
+name: Consumer Contract Tests
+
+on:
+  push:
+    branches: [main, develop, 'feature/**']
+  pull_request:
+    branches: [main, develop]
+
+env:
+  PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
+  PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
+
+jobs:
+  test-and-publish-pact:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Run Pact tests
+        run: npm run test:pact
+      
+      - name: Publish pacts to broker
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+        run: |
+          npx pact-broker publish \
+            ./pacts \
+            --consumer-app-version=${{ github.sha }} \
+            --branch=${{ github.ref_name }} \
+            --broker-base-url=$PACT_BROKER_BASE_URL \
+            --broker-token=$PACT_BROKER_TOKEN \
+            --tag=${{ github.ref_name }} \
+            --tag-with-git-branch
+      
+      - name: Publish pacts for PR
+        if: github.event_name == 'pull_request'
+        run: |
+          npx pact-broker publish \
+            ./pacts \
+            --consumer-app-version=${{ github.sha }} \
+            --branch=${{ github.head_ref }} \
+            --broker-base-url=$PACT_BROKER_BASE_URL \
+            --broker-token=$PACT_BROKER_TOKEN \
+            --tag=pr-${{ github.event.pull_request.number }}
+      
+      - name: Create PR comment with Pact status
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '✅ Pact contracts published successfully!\n\nView in Pact Broker: ${{ env.PACT_BROKER_BASE_URL }}'
+            })
+
+  can-i-deploy:
+    needs: test-and-publish-pact
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Check if safe to deploy
+        run: |
+          npx pact-broker can-i-deploy \
+            --pacticipant=ReactUserApp \
+            --version=${{ github.sha }} \
+            --to-environment=production \
+            --broker-base-url=$PACT_BROKER_BASE_URL \
+            --broker-token=$PACT_BROKER_TOKEN \
+            --retry-while-unknown=12 \
+            --retry-interval=10
+      
+      - name: Record deployment
+        if: success()
+        run: |
+          npx pact-broker record-deployment \
+            --pacticipant=ReactUserApp \
+            --version=${{ github.sha }} \
+            --environment=production \
+            --broker-base-url=$PACT_BROKER_BASE_URL \
+            --broker-token=$PACT_BROKER_TOKEN

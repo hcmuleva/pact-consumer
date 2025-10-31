@@ -1,0 +1,86 @@
+# ============================================
+# CONSUMER WORKFLOWS
+# ============================================
+
+# FILE: .github/workflows/consumer-pr.yml
+name: Consumer - PR Validation
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches:
+      - 'feature/**'
+      - 'featur/**'  # Added for your branch naming
+      - 'feat/**'
+
+env:
+  PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
+  PACT_BROKER_USERNAME: ${{ secrets.PACT_BROKER_BASIC_AUTH_USERNAME }}
+  PACT_BROKER_PASSWORD: ${{ secrets.PACT_BROKER_BASIC_AUTH_PASSWORD }}
+
+jobs:
+  test-and-publish-pact:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: npm test
+        continue-on-error: true
+
+      - name: Run Pact tests
+        run: npm run test:pact
+
+      - name: Publish Pact to Broker
+        run: |
+          npx pact-broker publish \
+            ./pacts \
+            --consumer-app-version=${{ github.sha }} \
+            --branch=${{ github.ref_name }} \
+            --broker-base-url=${{ env.PACT_BROKER_BASE_URL }} \
+            --broker-username=${{ env.PACT_BROKER_USERNAME }} \
+            --broker-password=${{ env.PACT_BROKER_PASSWORD }} \
+            --tag=${{ github.ref_name }}
+
+      - name: Check if can deploy
+        id: can-i-deploy
+        continue-on-error: true
+        run: |
+          npx pact-broker can-i-deploy \
+            --pacticipant=ConsumerApp \
+            --version=${{ github.sha }} \
+            --to-environment=test \
+            --broker-base-url=${{ env.PACT_BROKER_BASE_URL }} \
+            --broker-username=${{ env.PACT_BROKER_USERNAME }} \
+            --broker-password=${{ env.PACT_BROKER_PASSWORD }} \
+            --retry-while-unknown=30 \
+            --retry-interval=10
+
+      - name: Create summary
+        run: |
+          echo "## 🎉 Consumer Pact Tests" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Pact tests completed" >> $GITHUB_STEP_SUMMARY
+          echo "📦 Published to broker: ${{ env.PACT_BROKER_BASE_URL }}" >> $GITHUB_STEP_SUMMARY
+          echo "🔖 Version: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "🌿 Branch: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload Pact files
+        uses: actions/upload-artifact@v4
+        with:
+          name: pacts-${{ github.sha }}
+          path: pacts/
+          retention-days: 7

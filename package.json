@@ -2,7 +2,8 @@
   "name": "consumer-app",
   "version": "1.0.0",
   "scripts": {
-    "test:pact": "jest src/tests/pact --runInBand --verbose",
+    "test:pact": "jest --testMatch='**/*.pact.test.js'",
+
     "publish:pact": "node pact-config.js",
     "test:publish:pact": "npm run test:pact && npm run publish:pact",
     "pact:publish": "pact-broker publish ./pacts --consumer-app-version=${npm_package_version} --broker-base-url=${PACT_BROKER_BASE_URL} --broker-token=${PACT_BROKER_TOKEN}"

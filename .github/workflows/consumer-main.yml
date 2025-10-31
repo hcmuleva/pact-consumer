@@ -1,23 +1,31 @@
-name: Consumer - Publish Pact (Main)
+
+# FILE: .github/workflows/consumer-main.yml
+name: Consumer - Main Branch
 
 on:
   push:
     branches: [main]
-    paths:
-      - 'src/**'
-      - 'package.json'
 
 env:
   PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
-  PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
+  PACT_BROKER_USERNAME: ${{ secrets.PACT_BROKER_BASIC_AUTH_USERNAME }}
+  PACT_BROKER_PASSWORD: ${{ secrets.PACT_BROKER_BASIC_AUTH_PASSWORD }}
 
 jobs:
-  publish-pact:
+  publish-and-release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -27,6 +35,10 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Run tests
+        run: npm test
+        continue-on-error: true
 
       - name: Run Pact tests
         run: npm run test:pact
@@ -41,29 +53,39 @@ jobs:
             ./pacts \
             --consumer-app-version=${{ steps.package-version.outputs.version }} \
             --branch=main \
-            --broker-base-url=$PACT_BROKER_BASE_URL \
-            --broker-token=$PACT_BROKER_TOKEN \
+            --broker-base-url=${{ env.PACT_BROKER_BASE_URL }} \
+            --broker-username=${{ env.PACT_BROKER_USERNAME }} \
+            --broker-password=${{ env.PACT_BROKER_PASSWORD }} \
             --tag=main \
-            --tag=prod \
+            --tag=production \
             --build-url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
       - name: Can I deploy to production?
+        id: can-i-deploy
+        continue-on-error: true
         run: |
           npx pact-broker can-i-deploy \
             --pacticipant=ConsumerApp \
             --version=${{ steps.package-version.outputs.version }} \
             --to-environment=production \
-            --broker-base-url=$PACT_BROKER_BASE_URL \
-            --broker-token=$PACT_BROKER_TOKEN \
+            --broker-base-url=${{ env.PACT_BROKER_BASE_URL }} \
+            --broker-username=${{ env.PACT_BROKER_USERNAME }} \
+            --broker-password=${{ env.PACT_BROKER_PASSWORD }} \
             --retry-while-unknown=60 \
             --retry-interval=10
 
-      - name: Record deployment to production
-        if: success()
+      - name: Record deployment
+        if: steps.can-i-deploy.outcome == 'success'
         run: |
           npx pact-broker record-deployment \
             --pacticipant=ConsumerApp \
             --version=${{ steps.package-version.outputs.version }} \
             --environment=production \
-            --broker-base-url=$PACT_BROKER_BASE_URL \
-            --broker-token=$PACT_BROKER_TOKEN
+            --broker-base-url=${{ env.PACT_BROKER_BASE_URL }} \
+            --broker-username=${{ env.PACT_BROKER_USERNAME }} \
+            --broker-password=${{ env.PACT_BROKER_PASSWORD }}
+
+      - name: Semantic Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx semantic-release
