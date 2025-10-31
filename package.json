@@ -2,6 +2,8 @@
   "name": "consumer-app",
   "version": "1.0.0",
   "scripts": {
+    "test": "jest --testPathIgnorePatterns=pact",
+
     "test:pact": "jest --testMatch='**/*.pact.test.js'",
 
     "publish:pact": "node pact-config.js",
